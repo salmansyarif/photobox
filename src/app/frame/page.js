@@ -6,6 +6,10 @@ export default function FramePage() {
   const [stream, setStream] = useState(null);
   const [capturedImage, setCapturedImage] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [landscapeStep, setLandscapeStep] = useState(0);
+  const [firstLandscapePhoto, setFirstLandscapePhoto] = useState(null);
+  const [countdown, setCountdown] = useState(null);
+
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -14,16 +18,12 @@ export default function FramePage() {
     { id: 2, name: "Frame Landscape", image: "/2.png", orientation: "landscape" }
   ];
 
+  const currentFrame = frames.find((f) => f.id === selectedFrame);
+
   useEffect(() => {
     startCamera();
-
-    const handleVisibility = () => {
-      if (document.hidden) stopCamera();
-      else startCamera();
-    };
-
+    const handleVisibility = () => document.hidden ? stopCamera() : startCamera();
     document.addEventListener("visibilitychange", handleVisibility);
-
     return () => {
       stopCamera();
       document.removeEventListener("visibilitychange", handleVisibility);
@@ -33,170 +33,372 @@ export default function FramePage() {
   const startCamera = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" }
+        video: { facingMode: "user" },
       });
       setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
-    } catch (err) {
-      console.log("Camera blocked.");
+      if (videoRef.current) videoRef.current.srcObject = mediaStream;
+    } catch {
+      console.log("Kamera diblokir atau tidak tersedia");
     }
   };
 
-  const stopCamera = () => {
-    if (stream) stream.getTracks().forEach((track) => track.stop());
+  const stopCamera = () => stream && stream.getTracks().forEach((t) => t.stop());
+
+  const startCountdown = (callback) => {
+    let count = 3;
+    setCountdown(count);
+    const interval = setInterval(() => {
+      count--;
+      if (count > 0) setCountdown(count);
+      else {
+        clearInterval(interval);
+        setCountdown(null);
+        callback();
+      }
+    }, 1000);
   };
 
-  const capturePhoto = () => {
-    if (!selectedFrame) return alert("Pilih frame terlebih dahulu!");
+  // -------------------------
+  // FOTO PORTRAIT
+  // -------------------------
+  const capturePortrait = () => {
+    if (!currentFrame || !videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const frame = frames.find((f) => f.id === selectedFrame);
-
-    // ATUR ASPECT RATIO FIX TANPA GEPENG
-    canvas.width = frame.orientation === "portrait" ? 720 : 1280;
-    canvas.height = frame.orientation === "portrait" ? 1280 : 720;
+    canvas.width = 1080;
+    canvas.height = 1920;
 
     const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const scaleX = canvas.width / video.videoWidth;
+    const scaleY = canvas.height / video.videoHeight;
+    const scale = Math.max(scaleX, scaleY);
 
-    const frameImg = new Image();
-    frameImg.src = frame.image;
+    const w = video.videoWidth * scale;
+    const h = video.videoHeight * scale;
+    const x = (canvas.width - w) / 2;
+    const y = (canvas.height - h) / 2;
 
-    frameImg.onload = () => {
-      ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
-      const imageData = canvas.toDataURL("image/png");
-      setCapturedImage(imageData);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -x - w, y, w, h);
+    ctx.restore();
+
+    const img = new Image();
+    img.src = currentFrame.image;
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      setCapturedImage(canvas.toDataURL("image/png"));
       setShowPreview(true);
       stopCamera();
     };
   };
 
-  const downloadPhoto = () => {
+  // -------------------------
+  // FOTO LANDSCAPE
+  // -------------------------
+  const captureLandscape = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    const cw = 640;
+    const ch = 720;
+
+    canvas.width = cw;
+    canvas.height = ch;
+
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, cw, ch);
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const ratioV = vw / vh;
+    const ratioC = cw / ch;
+
+    let w, h, x, y;
+    if (ratioV > ratioC) {
+      h = ch;
+      w = h * ratioV;
+      x = (cw - w) / 2;
+      y = 0;
+    } else {
+      w = cw;
+      h = w / ratioV;
+      x = 0;
+      y = (ch - h) / 2;
+    }
+
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -x - w, y, w, h);
+    ctx.restore();
+
+    const data = canvas.toDataURL("image/png");
+
+    if (landscapeStep === 1) {
+      setFirstLandscapePhoto(data);
+      setLandscapeStep(2);
+    } else if (landscapeStep === 2) {
+      mergeLandscape(firstLandscapePhoto, data);
+    }
+  };
+
+  const mergeLandscape = (left, right) => {
+    if (!canvasRef.current || !currentFrame) return;
+
+    const canvas = canvasRef.current;
+    canvas.width = 1280;
+    canvas.height = 720;
+
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const l = new Image();
+    const r = new Image();
+
+    l.src = left;
+    r.src = right;
+
+    l.onload = () => {
+      ctx.drawImage(l, 0, 0, 640, 720);
+
+      r.onload = () => {
+        ctx.drawImage(r, 640, 0, 640, 720);
+
+        const f = new Image();
+        f.src = currentFrame.image;
+
+        f.onload = () => {
+          ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
+          setCapturedImage(canvas.toDataURL("image/png"));
+          setShowPreview(true);
+          setLandscapeStep(0);
+          setFirstLandscapePhoto(null);
+          stopCamera();
+        };
+      };
+    };
+  };
+
+  const handleCapture = () => {
+    if (!selectedFrame) return alert("Pilih frame terlebih dahulu!");
+    if (currentFrame.orientation === "portrait") startCountdown(capturePortrait);
+    else if (landscapeStep === 0) setLandscapeStep(1);
+    else startCountdown(captureLandscape);
+  };
+
+  const handleDownload = () => {
+    if (!capturedImage) return;
     const link = document.createElement("a");
-    link.download = `photo-${Date.now()}.png`;
+    link.download = `foto-${Date.now()}.png`;
     link.href = capturedImage;
     link.click();
   };
 
-  const retakePhoto = () => {
+  const handleRetake = () => {
     setCapturedImage(null);
     setShowPreview(false);
+    setLandscapeStep(0);
+    setFirstLandscapePhoto(null);
+
+    if (canvasRef.current)
+      canvasRef.current
+        .getContext("2d")
+        .clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
     startCamera();
   };
 
+  const handleCancel = () => {
+    setLandscapeStep(0);
+    setFirstLandscapePhoto(null);
+  };
+
+  const buttonText = !selectedFrame
+    ? "Pilih Frame Dulu"
+    : currentFrame.orientation === "portrait"
+    ? "Ambil Foto"
+    : ["Mulai Ambil Foto (2x)", "📸 Foto 1 (Kiri)", "📸 Foto 2 (Kanan)"][landscapeStep];
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 p-6 flex flex-col items-center text-white">
+
       <h1 className="text-3xl font-bold mb-4">Foto Dengan Frame</h1>
 
       {/* PREVIEW */}
-      {showPreview && capturedImage ? (
-  <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-    <div className="bg-white text-black p-4 rounded-xl max-w-sm w-full shadow-2xl">
-      <img src={capturedImage} className="w-full rounded-lg mb-4" />
+      {showPreview && capturedImage && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <div className="bg-white text-black p-4 rounded-xl max-w-sm w-full shadow-2xl">
+            <img
+              src={capturedImage}
+              className="w-full rounded-lg mb-4"
+              alt="Hasil Foto"
+            />
 
-      <button
-        onClick={downloadPhoto}
-        className="w-full bg-green-600 py-2 rounded-lg font-bold mb-2"
-      >
-        Download
-      </button>
+            <button
+              onClick={handleDownload}
+              className="w-full bg-green-600 py-2 rounded-lg font-bold mb-2 text-white hover:bg-green-700"
+            >
+              Download
+            </button>
 
-      <button
-        onClick={retakePhoto}
-        className="w-full bg-blue-600 py-2 rounded-lg font-bold mb-2"
-      >
-        Foto Ulang
-      </button>
+            <button
+              onClick={handleRetake}
+              className="w-full bg-blue-600 py-2 rounded-lg font-bold mb-2 text-white hover:bg-blue-700"
+            >
+              Foto Ulang
+            </button>
 
-      <button
-        onClick={() => (window.location.href = "/")}
-        className="w-full bg-gray-800 py-2 rounded-lg text-white font-bold"
-      >
-        Selesai
-      </button>
-    </div>
-  </div>
-) : null}
-
+            <button
+              onClick={() => (window.location.href = "/")}
+              className="w-full bg-gray-800 py-2 rounded-lg text-white font-bold hover:bg-gray-900"
+            >
+              Selesai
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* CAMERA */}
       {!showPreview && (
         <>
-          <div className="bg-blue-800/40 backdrop-blur-md p-5 rounded-2xl shadow-xl w-full max-w-sm mb-4">
+          <div className="bg-blue-800/40 backdrop-blur-md p-5 rounded-2xl shadow-xl w-full max-w-lg mb-4">
+            {currentFrame?.orientation === "landscape" && landscapeStep > 0 && (
+              <div className="mb-3 p-3 bg-yellow-500 text-black rounded-lg text-center font-bold">
+                {landscapeStep === 1
+                  ? "📸 POSE 1: Wajah otomatis masuk frame kiri!"
+                  : "📸 POSE 2: Wajah otomatis masuk frame kanan!"}
+                <div className="text-xs mt-1 font-normal">
+                  Jangan geser! Tetap di tengah.
+                </div>
+              </div>
+            )}
 
-            {/* CAMERA ORIENTASI OTOMATIS */}
             <div
-              className={`relative w-full overflow-hidden rounded-xl bg-black
-                ${
-                  selectedFrame
-                    ? frames.find((f) => f.id === selectedFrame).orientation === "portrait"
-                      ? "aspect-[3/4]"
-                      : "aspect-video"
-                    : "aspect-square"
-                }
-              `}
+              className={`relative w-full overflow-hidden rounded-xl bg-black ${
+                currentFrame
+                  ? currentFrame.orientation === "portrait"
+                    ? "aspect-[3/4]"
+                    : "aspect-video"
+                  : "aspect-square"
+              }`}
             >
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
-                className="absolute inset-0 w-full h-full object-cover"
+                muted
+                className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
+                style={{ transform: "scaleX(-1)" }}
               />
-              {selectedFrame && (
+
+              {currentFrame && (
                 <img
-                  src={frames.find((f) => f.id === selectedFrame)?.image}
-                  className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                  src={currentFrame.image}
+                  className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                  alt="Frame"
                 />
+              )}
+
+              {countdown && (
+                <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10">
+                  <div className="text-9xl font-bold text-white animate-ping">
+                    {countdown}
+                  </div>
+                </div>
               )}
             </div>
 
             <button
-              onClick={capturePhoto}
-              disabled={!selectedFrame}
+              onClick={handleCapture}
+              disabled={!selectedFrame || countdown}
               className={`w-full py-3 mt-4 rounded-lg font-bold text-white shadow-lg transition-all ${
-                selectedFrame
+                selectedFrame && !countdown
                   ? "bg-green-600 hover:bg-green-700"
                   : "bg-gray-500 cursor-not-allowed"
               }`}
             >
-              Ambil Foto
+              {buttonText}
             </button>
+
+            {landscapeStep > 0 && !countdown && (
+              <button
+                onClick={handleCancel}
+                className="w-full py-2 mt-2 rounded-lg font-bold text-white bg-red-600 hover:bg-red-700"
+              >
+                Batal
+              </button>
+            )}
+
+            {landscapeStep > 0 &&
+              currentFrame?.orientation === "landscape" && (
+                <div className="mt-4 flex gap-2">
+                  <div
+                    className={`flex-1 h-2 rounded-full ${
+                      landscapeStep >= 1 ? "bg-green-500" : "bg-gray-600"
+                    }`}
+                  />
+                  <div
+                    className={`flex-1 h-2 rounded-full ${
+                      landscapeStep >= 2 ? "bg-green-500" : "bg-gray-600"
+                    }`}
+                  />
+                </div>
+              )}
           </div>
 
-          {/* HIDDEN CANVAS */}
           <canvas ref={canvasRef} className="hidden" />
 
-          {/* FRAME LIST */}
+          {/* FRAME PILIHAN */}
           <h2 className="text-xl font-bold mb-3">Pilih Frame</h2>
+
           <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
             {frames.map((frame) => (
               <div
                 key={frame.id}
-                onClick={() => setSelectedFrame(frame.id)}
-                className={`border rounded-xl p-2 cursor-pointer transition-all bg-white/10 backdrop-blur-md ${
-                  selectedFrame === frame.id
-                    ? "border-yellow-400 shadow-xl scale-105"
-                    : "border-white/40"
-                }`}
+                onClick={() => {
+                  setSelectedFrame(frame.id);
+                  setLandscapeStep(0);
+                  setFirstLandscapePhoto(null);
+                }}
+                className={`border rounded-xl p-3 cursor-pointer transition-all bg-white/10 backdrop-blur-md
+                  ${
+                    selectedFrame === frame.id
+                      ? "border-yellow-400 shadow-xl scale-105"
+                      : "border-white/40"
+                  }
+                  ${
+                    frame.orientation === "portrait"
+                      ? "h-64"
+                      : "h-40"
+                  }
+                `}
               >
-                <p className="text-center text-sm mb-1 font-bold">{frame.name}</p>
+                <p className="text-center text-sm mb-2 font-bold">
+                  {frame.name}
+                  {frame.orientation === "landscape" && " (2x)"}
+                </p>
 
                 <div
                   className={`w-full overflow-hidden rounded-lg bg-black/30
-                    ${
-                      frame.orientation === "portrait"
-                        ? "aspect-[3/4]"
-                        : "aspect-video"
-                    }
-                  `}
+                  ${
+                    frame.orientation === "portrait"
+                      ? "aspect-[3/4]"
+                      : "aspect-video"
+                  }
+                `}
                 >
                   <img
                     src={frame.image}
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-cover"
+                    alt={frame.name}
                   />
                 </div>
               </div>
